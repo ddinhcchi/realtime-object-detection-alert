@@ -39,12 +39,20 @@ This repo demonstrates all four in a single Streamlit app.
 
 YOLOv8n, 640×640 synthetic frame, 50 runs after 5-run warm-up. Reproduce with `PYTHONPATH=. python scripts/benchmark.py`.
 
+**Detection only**, YOLOv8n on 640×640 synthetic frame (50 runs, 5 warm-up):
+
 | Device | p50 | p95 | mean | throughput |
 |---|---:|---:|---:|---:|
 | **MPS (Apple GPU)** | **10.5 ms** | 21.1 ms | 11.7 ms | **~95 FPS** |
 | CPU fallback | 31.4 ms | 40.0 ms | 32.6 ms | ~32 FPS |
 
-End-to-end with ByteTrack + zone test + YuNet blur the pipeline still clears 25–30 FPS on M4 — well above any IP camera's 15-FPS output.
+**End-to-end pipeline on live 1080p RTSP** (detect + ByteTrack + dwell test + YuNet face blur + render), measured against a real Hikvision camera on LAN:
+
+| Stage | p50 | p95 | throughput |
+|---|---:|---:|---:|
+| Full pipeline @ 1080p, M4 MPS | **80 ms** | 160 ms | **~12 FPS** |
+
+12 FPS is above the 8–10 FPS most IP cameras output by default and well above what zone-intrusion logic needs. For higher FPS, downscale the inference frame or run detection only every Nth frame (ByteTrack interpolates between detector runs).
 
 ---
 
