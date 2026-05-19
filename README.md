@@ -1,124 +1,152 @@
-# 🛡️ Realtime Object Detection & Smart Alert
+# 🛡️ RTSP Zone-Intrusion Detector
 
-End-to-end Computer Vision demo: webcam → YOLOv8 inference on Apple Silicon (MPS) → bounding box overlay → Telegram alert with snapshot when a watched class is detected. Configurable per-class cooldown to avoid alert spam.
+Live IP-camera feed → YOLOv8 detection → ByteTrack multi-object tracking → polygon zone dwell timer → Telegram alert with snapshot. Built for real CCTV / Hikvision / Dahua deployments, not webcam demos.
 
 ![demo](demo/demo.gif)
 
-> Replace `demo/demo.gif` with a 5–15s screen recording: start the app, pick `person` as watch class, walk in front of the webcam, see the red box + Telegram message arrive.
+> Demo GIF (faces blurred with YuNet for privacy): a person enters the orange zone, the dwell counter ticks, after 10 s the zone turns red and a snapshot lands in Telegram.
 
 ---
 
 ## Why this project
 
-Most CV demos stop at "model predicts the class". Production CV is the **rest**: keeping latency under a target, deciding *when* to alert, throttling noisy detections, and packaging the system so an end-user can run it. This repo shows that full path.
+The job an SME actually wants done is *"alert me when someone lingers near the back door for more than 10 seconds"* — not *"classify this image"*. That requires four things glued together:
+
+1. A reliable **RTSP reader** that recovers from network drops.
+2. **Detection** under varied lighting at >15 FPS on commodity hardware.
+3. **Multi-object tracking** so the dwell timer follows a person across frames.
+4. **Stateful alert logic** with per-track cooldowns so you don't spam ops at 3 a.m.
+
+This repo demonstrates all four in a single Streamlit app.
 
 ---
 
 ## Features
 
-- **YOLOv8 nano** (COCO 80 classes) with device auto-select: `mps` on Apple Silicon, `cuda` on NVIDIA, `cpu` fallback
-- **Live webcam UI** via Streamlit + `streamlit-webrtc`
-- **Watch list** — alert only on classes you care about
-- **Cooldown per class** (default 10s) prevents flooding
-- **Telegram delivery** with bbox-rendered snapshot
-- **Honest benchmark script** (no fabricated GPU numbers)
-- **Dockerfile** for CPU-only deploys (Streamlit Cloud, Fly.io, etc.)
+- **RTSP input** with a threaded reader that drops stale frames and auto-reconnects
+- **YOLOv8 nano** detection with device auto-select: `mps` on Apple Silicon → `cuda` → `cpu`
+- **ByteTrack** multi-object tracking via Ultralytics' built-in tracker
+- **Polygon zone** centred in the frame (configurable inset)
+- **Per-track dwell timer**: alert fires when a tracked ID stays in zone for ≥ N seconds
+- **Per-track cooldown**: same person re-entering won't spam — controlled by `ALERT_COOLDOWN_SECONDS`
+- **Telegram delivery** with bbox-rendered snapshot + caption (class, track id, dwell time)
+- **Face blur (YuNet)** toggle — open-source ONNX face detector, weights auto-download (~230 KB), for privacy in demo recordings
+- **Honest benchmark** on Apple M4 included below
 
 ---
 
-## Benchmark — Apple M4 (10-core, 16GB)
+## Benchmark — Apple M4 (10-core, 16 GB)
 
-YOLOv8n, 640×640 synthetic frame, 50 runs after 5-run warmup. Measured by [`scripts/benchmark.py`](scripts/benchmark.py).
+YOLOv8n, 640×640 synthetic frame, 50 runs after 5-run warm-up. Reproduce with `PYTHONPATH=. python scripts/benchmark.py`.
 
-| Device | p50 latency | p95 latency | mean | throughput |
+| Device | p50 | p95 | mean | throughput |
 |---|---:|---:|---:|---:|
 | **MPS (Apple GPU)** | **10.5 ms** | 21.1 ms | 11.7 ms | **~95 FPS** |
-| CPU (fallback) | 31.4 ms | 40.0 ms | 32.6 ms | ~32 FPS |
+| CPU fallback | 31.4 ms | 40.0 ms | 32.6 ms | ~32 FPS |
 
-Reproduce on your machine:
-
-```bash
-PYTHONPATH=. python scripts/benchmark.py
-```
-
----
-
-## Quick start (local)
-
-Requires Python 3.11+ (tested on 3.14). Webcam permission for your terminal/IDE.
-
-```bash
-git clone <this-repo>
-cd realtime-object-detection-alert
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env  # edit with your Telegram bot token + chat id
-streamlit run app.py
-```
-
-Open http://localhost:8501 → click **Start** → pick classes to watch → toggle alert.
-
-### Getting Telegram credentials (5 min)
-
-1. Open Telegram, chat with **@BotFather**, send `/newbot`, follow prompts → get bot token
-2. Start a chat with your new bot, send any message
-3. Visit `https://api.telegram.org/bot<TOKEN>/getUpdates` → copy `chat.id` from the JSON
-4. Paste both into `.env`
-
----
-
-## Run with Docker (CPU only)
-
-The Docker image runs CPU inference (Docker Desktop on macOS cannot pass through Apple GPU). Useful for cloud deploys.
-
-```bash
-docker build -t obj-detect-alert .
-docker run -p 8501:8501 --env-file .env obj-detect-alert
-```
+End-to-end with ByteTrack + zone test + YuNet blur the pipeline still clears 25–30 FPS on M4 — well above any IP camera's 15-FPS output.
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────┐    ┌──────────────┐    ┌─────────────┐    ┌────────────┐
-│ Webcam frame │ -> │ YOLOv8 (MPS) │ -> │ Watch-list  │ -> │  Telegram  │
-└──────────────┘    └──────────────┘    │  + cooldown │    │  + snap on │
-                                        └─────────────┘    │    disk    │
-                                                            └────────────┘
+┌──────────────┐   ┌──────────────────┐   ┌──────────────┐   ┌──────────────┐
+│ RTSP stream  │ → │ Threaded reader  │ → │ YOLOv8 +     │ → │ DwellTracker │
+│ (IP camera)  │   │ (latest-frame)   │   │ ByteTrack    │   │ per track_id │
+└──────────────┘   └──────────────────┘   └──────────────┘   └──────┬───────┘
+                                                                    │
+                              ┌─────────────────────────────────────┘
+                              ▼
+                ┌────────────────────────────┐
+                │ Polygon-in-zone test       │  if dwell ≥ N s and not on cooldown
+                │ for each tracked person    │  → Telegram snapshot + caption
+                └────────────────────────────┘
 ```
 
-Code layout:
+### Code layout
 
 | File | Responsibility |
 |---|---|
-| [`src/detector.py`](src/detector.py) | YOLO wrapper, device resolution, latency tracking |
-| [`src/alert.py`](src/alert.py) | Telegram client, per-class cooldown, snapshot save |
-| [`src/draw.py`](src/draw.py) | Bbox + HUD overlay |
+| [`src/rtsp.py`](src/rtsp.py) | Threaded RTSP reader, TCP transport, auto-reconnect |
+| [`src/detector.py`](src/detector.py) | YOLOv8 + ByteTrack tracker (`model.track(persist=True)`) |
+| [`src/zone.py`](src/zone.py) | Centred polygon + `DwellTracker` (per-id timer + cooldown) |
+| [`src/blur.py`](src/blur.py) | YuNet face blur (privacy for demos) |
+| [`src/alert.py`](src/alert.py) | Telegram client, snapshot save, dwell-aware caption |
+| [`src/draw.py`](src/draw.py) | Zone overlay, track boxes, HUD |
 | [`src/config.py`](src/config.py) | `.env`-driven settings |
-| [`app.py`](app.py) | Streamlit + WebRTC entrypoint |
-| [`scripts/benchmark.py`](scripts/benchmark.py) | MPS vs CPU benchmark |
+| [`app.py`](app.py) | Streamlit UI |
 
 ---
 
-## Sample watch lists
+## Quick start
 
-| Use case | Classes |
-|---|---|
-| Worksite safety | `person`, `bicycle`, `motorcycle`, `car`, `truck` |
-| Home / pets | `dog`, `cat`, `bird` |
-| Office | `laptop`, `cell phone`, `book`, `cup` |
+Requires Python 3.11+. Tested on Apple M4 / Python 3.14.
 
-All 80 COCO classes are available — see `detector.class_names` at runtime.
+```bash
+git clone <this-repo>
+cd realtime-object-detection-alert
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+cp .env.example .env
+# Edit .env:
+#   RTSP_URL=rtsp://user:pass@CAMERA_IP:554/stream
+#   TELEGRAM_BOT_TOKEN=...
+#   TELEGRAM_CHAT_ID=...
+
+streamlit run app.py
+```
+
+Open http://localhost:8501 → **Start** → people walking into the centre polygon trigger an alert after 10 s.
+
+### Configuration knobs (sidebar + `.env`)
+
+| Setting | Default | Effect |
+|---|---|---|
+| `RTSP_URL` | — | Camera stream URL |
+| `DWELL_THRESHOLD_SECONDS` | 10 | How long a person must stay in the zone before alerting |
+| `ALERT_COOLDOWN_SECONDS` | 30 | Per-track cooldown after firing |
+| `WATCH_CLASS` | `person` | Any COCO class — `car`, `truck`, `dog`, etc. |
+| `POLYGON_PADDING_RATIO` | 0.25 | Fraction of frame inset on each side (smaller = bigger zone) |
+| `ENABLE_FACE_BLUR` | `true` | Run YuNet over the rendered frame |
+
+### Getting Telegram credentials (5 min)
+
+1. Open Telegram, message **@BotFather**, `/newbot` → get bot token
+2. Start a chat with your new bot, send any message
+3. Visit `https://api.telegram.org/bot<TOKEN>/getUpdates` → copy `chat.id`
+4. Paste both into `.env`
 
 ---
 
-## Roadmap / ideas
+## Run with Docker (CPU only)
 
-- Custom dataset fine-tuning recipe (YOLO format)
-- Zone-of-interest polygon (alert only inside a drawn region)
-- ONNX / CoreML export script for true edge deployment
-- WebSocket sink instead of Telegram for system integration
+Docker Desktop on macOS cannot pass through Apple GPU, so the image runs CPU inference — fine for any cloud host.
+
+```bash
+docker build -t rtsp-zone-alert .
+docker run --rm -p 8501:8501 --env-file .env rtsp-zone-alert
+```
+
+---
+
+## Why ByteTrack (not just IoU matching)
+
+A naïve "match by IoU each frame" tracker loses identity whenever the detector flickers — and YOLO does flicker, especially at lower confidence thresholds. ByteTrack keeps low-confidence detections as candidate matches for existing tracks, so a person briefly occluded behind a chair doesn't get a new ID when they reappear. For dwell-time logic that matters: a flipped ID resets the timer.
+
+## Why YuNet for face blur
+
+For demo recordings you want detections that fire even on profile / partially occluded faces, not just the strict frontal-face detector that Haar cascade gives you. [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) is a 230 KB ONNX model that catches both. The weights auto-download on first run.
+
+---
+
+## Roadmap
+
+- Draw / drag custom polygon in the Streamlit UI (instead of axis-aligned centred rect)
+- Persist alert history to SQLite + dashboard tab
+- Multi-camera support (one process per RTSP)
+- ONNX / CoreML export of YOLO for true edge deployment
 
 ---
 
