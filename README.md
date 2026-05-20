@@ -139,6 +139,38 @@ docker run --rm -p 8501:8501 --env-file .env rtsp-zone-alert
 
 ---
 
+## Troubleshooting
+
+**`Waiting for first frame…` never resolves**
+
+- 90% of the time this is RTSP transport. The reader forces `rtsp_transport=tcp` via an `OPENCV_FFMPEG_CAPTURE_OPTIONS` env var — some cameras only stream UDP. Try `OPENCV_FFMPEG_CAPTURE_OPTIONS="rtsp_transport;udp"` to compare.
+- Confirm the URL works in VLC first (`File → Open Network`). If VLC can't open it either, the issue is upstream (camera, network, credentials).
+- Check the RTSP path. Hikvision is usually `/Streaming/Channels/101`, Dahua is `/cam/realmonitor?channel=1&subtype=0`, generic ONVIF is often `/H.264` or `/live`.
+
+**Camera credentials contain `@` or `:` characters**
+
+These conflict with the `user:pass@host` URL syntax. URL-encode them:
+
+```python
+from urllib.parse import quote
+user = quote("admin")
+pwd = quote("p@ss:word")
+# rtsp://admin:p%40ss%3Aword@192.168.1.10:554/H.264
+```
+
+**Inference latency higher than the benchmark suggests**
+
+- First 1–2 frames after `Start` are slow (MPS shader compile + tracker warm-up). The HUD overlay shows steady-state latency.
+- 4K cameras roughly quarter your FPS vs. 1080p. Either lower the camera resolution server-side or downscale before `detector.track()`.
+
+**Telegram alerts never fire even though tracks enter the zone**
+
+- Check the HUD — does the zone overlay turn red when someone steps inside? If not, the polygon padding may be too large; lower `POLYGON_PADDING_RATIO`.
+- The cooldown is per-track-id, so re-entering the zone with the same id within `ALERT_COOLDOWN_SECONDS` is silent by design.
+- Confirm token + chat id at <https://api.telegram.org/bot$TOKEN/getMe> — should return `"ok": true`.
+
+---
+
 ## Why ByteTrack (not just IoU matching)
 
 A naïve "match by IoU each frame" tracker loses identity whenever the detector flickers — and YOLO does flicker, especially at lower confidence thresholds. ByteTrack keeps low-confidence detections as candidate matches for existing tracks, so a person briefly occluded behind a chair doesn't get a new ID when they reappear. For dwell-time logic that matters: a flipped ID resets the timer.
