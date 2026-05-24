@@ -155,7 +155,8 @@ These conflict with the `user:pass@host` URL syntax. URL-encode them:
 from urllib.parse import quote
 user = quote("admin")
 pwd = quote("p@ss:word")
-# rtsp://admin:p%40ss%3Aword@192.168.1.10:554/H.264
+# rtsp://admin:p%40ss%3Aword@192.0.2.10:554/H.264
+# (192.0.2.0/24 is the RFC 5737 documentation range — safe in examples)
 ```
 
 **Inference latency higher than the benchmark suggests**
