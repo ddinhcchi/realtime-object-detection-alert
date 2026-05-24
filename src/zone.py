@@ -5,19 +5,33 @@ import cv2
 import numpy as np
 
 
-def centered_polygon(frame_w: int, frame_h: int, padding_ratio: float) -> np.ndarray:
-    """Axis-aligned rectangle inset by `padding_ratio` on every side."""
-    pad_x = int(frame_w * padding_ratio)
-    pad_y = int(frame_h * padding_ratio)
+def rect_polygon(x1: int, y1: int, x2: int, y2: int) -> np.ndarray:
+    """Axis-aligned rectangle polygon from two opposite corners.
+
+    Returns the 4 vertices in clockwise order, dtype int32 — the shape OpenCV
+    expects for `fillPoly`, `polylines` and `pointPolygonTest`.
+    """
+    x1, x2 = sorted((int(x1), int(x2)))
+    y1, y2 = sorted((int(y1), int(y2)))
     return np.array(
-        [
-            [pad_x, pad_y],
-            [frame_w - pad_x, pad_y],
-            [frame_w - pad_x, frame_h - pad_y],
-            [pad_x, frame_h - pad_y],
-        ],
+        [[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
         dtype=np.int32,
     )
+
+
+def centered_polygon(frame_w: int, frame_h: int, padding_ratio: float) -> np.ndarray:
+    """Centred rectangle inset by `padding_ratio` of frame size on each side."""
+    pad_x = int(frame_w * padding_ratio)
+    pad_y = int(frame_h * padding_ratio)
+    return rect_polygon(pad_x, pad_y, frame_w - pad_x, frame_h - pad_y)
+
+
+def polygon_from_points(points: list[tuple[int, int]]) -> np.ndarray:
+    """Build an int32 polygon from a list of (x, y) points — for future
+    free-form zones drawn in the UI."""
+    if len(points) < 3:
+        raise ValueError("polygon needs at least 3 points")
+    return np.array(points, dtype=np.int32)
 
 
 def point_in_polygon(point: tuple[int, int], polygon: np.ndarray) -> bool:
