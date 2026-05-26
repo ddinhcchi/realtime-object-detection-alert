@@ -182,6 +182,26 @@ For demo recordings you want detections that fire even on profile / partially oc
 
 ---
 
+## Security — secret scanning
+
+The repo wires up [`gitleaks`](https://github.com/gitleaks/gitleaks) via [`pre-commit`](https://pre-commit.com) so it's impossible to accidentally commit a Telegram bot token, RTSP password, or any other credential. Once installed, the hook runs locally on every `git commit` and blocks the commit if anything matches.
+
+```bash
+brew install gitleaks pre-commit   # macOS — Linux users: pipx install both
+pre-commit install                  # installs the .git/hooks/pre-commit shim
+pre-commit run --all-files          # scan everything already in the index
+gitleaks detect --source . --verbose # scan the full git history
+```
+
+[`.gitleaks.toml`](.gitleaks.toml) extends the default ruleset with two allowlists:
+
+- `.env.example` and `README.md` — they intentionally contain placeholder credentials
+- RFC 5737 documentation IPs (`192.0.2.x`, `198.51.100.x`, `203.0.113.x`) — these are reserved for examples and should not be flagged
+
+If you're cloning this repo into your own GitHub org, add a [Push Protection secret scanner](https://docs.github.com/en/code-security/secret-scanning/push-protection-for-repositories-and-organizations) as a second line of defence.
+
+---
+
 ## Roadmap
 
 - Draw / drag custom polygon in the Streamlit UI (instead of axis-aligned centred rect)

@@ -1,0 +1,22 @@
+# gitleaks v8 custom config — extends the default ruleset with project-specific
+# allowlists so documentation placeholders don't trigger false positives.
+#
+# Test locally:   gitleaks detect --source . --config .gitleaks.toml --verbose
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documentation placeholders are not secrets"
+paths = [
+    '''\.env\.example$''',
+    '''README\.md$''',
+]
+
+[[allowlists]]
+description = "RFC 5737 documentation IPs and RFC 7042 example MACs are not secrets"
+regexes = [
+    '''192\.0\.2\.\d+''',
+    '''198\.51\.100\.\d+''',
+    '''203\.0\.113\.\d+''',
+]
